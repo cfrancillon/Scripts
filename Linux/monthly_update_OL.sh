@@ -147,14 +147,14 @@ kernel_reboot=0
 services=""
 
 if command -v needrestart &>/dev/null; then
-    # Récupération des infos en mode batch (-r n = pas de redémarrage, -b = sortie parseable)
-    nr_output=$(needrestart -r n -b 2>/dev/null)
+    # Récupération des infos en mode batch (-b = sortie parseable, sans action)
+    nr_output=$(needrestart -b 2>/dev/null)
 
-    # NEEDRESTART-KSTA: 3 = noyau mis à jour, reboot nécessaire
+    # NEEDRESTART-KSTA: 3 = noyau mis à jour, reboot nécessaire (1 = OK)
     ksta=$(echo "$nr_output" | grep "^NEEDRESTART-KSTA:" | awk '{print $2}')
     [ "$ksta" = "3" ] && kernel_reboot=1
 
-    # Récupération des services sous forme de liste
+    # Récupération des services uniquement (NEEDRESTART-SVC), on ignore NEEDRESTART-SESS
     services=$(echo "$nr_output" | grep "^NEEDRESTART-SVC:" | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')
 
     if [ "$silent" -eq 0 ]; then
