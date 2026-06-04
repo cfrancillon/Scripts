@@ -33,12 +33,21 @@ done
 # ---------------------------------------------------------------
 required_packages=()
 command -v needrestart &>/dev/null || required_packages+=("needrestart")
-command -v checkrestart &>/dev/null || required_packages+=("debian-goodies")
 
 if [ ${#required_packages[@]} -gt 0 ]; then
     echo "${b}${u}Paquets requis manquants${n}"
     echo "${b}${u}------------------------${n}"
     echo
+
+    # needrestart est dans EPEL — vérifier si EPEL est activé
+    if [[ " ${required_packages[@]} " =~ "needrestart" ]]; then
+        if ! dnf repolist enabled 2>/dev/null | grep -qi "epel"; then
+            echo "  ${b}Attention :${n} le dépôt EPEL est requis pour installer needrestart."
+            echo "  Pour l'activer : dnf install -y epel-release"
+            echo
+        fi
+    fi
+
     for pkg in "${required_packages[@]}"; do
         echo "  * ${b}$pkg${n}"
     done
@@ -49,7 +58,12 @@ if [ ${#required_packages[@]} -gt 0 ]; then
 
     case $response_install in
         "O" | 'o' | "Oui" | "oui" )
-            apt-get -y -qq install "${required_packages[@]}"
+            # Activer EPEL si nécessaire pour needrestart
+            if ! dnf repolist enabled 2>/dev/null | grep -qi "epel"; then
+                echo "Activation du dépôt EPEL..."
+                dnf install -y -q epel-release
+            fi
+            dnf install -y -q "${required_packages[@]}"
             echo "Installation terminée."
             ;;
         *)
@@ -62,13 +76,13 @@ fi
 # ---------------------------------------------------------------
 # Mise à jour des paquets
 # ---------------------------------------------------------------
-apt-get -qq autoremove
-apt-get -qq update
+dnf -q autoremove -y
+dnf -q check-update
+# dnf check-update retourne 100 si des MAJ sont disponibles, 0 sinon
+check_rc=$?
 
-# --- Comptage propre (ignore la ligne "En train de lister..." / "Listing...") ---
-count=$(apt list --upgradable 2>/dev/null | tail -n +2 | wc -l)
-
-if [ "$count" -gt 0 ]; then
+if [ "$check_rc" -eq 100 ]; then
+    count=$(dnf check-update 2>/dev/null | grep -v "^$" | grep -v "^Dernières" | grep -v "^Last" | grep -v "^Obsoleting" | tail -n +2 | wc -l)
     if [ "$count" -gt 1 ]; then
         echo "Il y a $count packages à mettre à jour."
     else
@@ -76,8 +90,12 @@ if [ "$count" -gt 0 ]; then
     fi
     text="les mises à jour"
     [ "$count" -eq 1 ] && text="la mise à jour"
-else
+elif [ "$check_rc" -eq 0 ]; then
     echo "Aucun package à mettre à jour."
+    count=0
+else
+    echo "Erreur lors de la vérification des mises à jour (code $check_rc)."
+    count=0
 fi
 
 echo
@@ -89,7 +107,7 @@ if [ "$silent" -eq 0 ]; then
 
     case $response_list in
         "O" | 'o' | "Oui" | "oui" )
-            apt list --upgradable 2>/dev/null
+            dnf check-update 2>/dev/null
             ;;
         *)
             ;;
@@ -104,7 +122,7 @@ if [ "$silent" -eq 0 ]; then
 
         case $response_upgrade in
             "O" | 'o' | "Oui" | "oui" )
-                apt-get -y upgrade
+                dnf upgrade -y
                 ;;
             *)
                 ;;
@@ -112,9 +130,8 @@ if [ "$silent" -eq 0 ]; then
     fi
 
 elif [ "$silent" -eq 1 ]; then
-    # --- Mode silencieux : -y obligatoire pour éviter le blocage ---
     if [ "$count" -gt 0 ]; then
-        apt-get -y -qq upgrade
+        dnf upgrade -y -q
     fi
 fi
 
@@ -130,14 +147,14 @@ kernel_reboot=0
 services=""
 
 if command -v needrestart &>/dev/null; then
-    # Récupération des infos en mode batch (-r n = pas de redémarrage, -b = sortie parseable)
-    nr_output=$(needrestart -r n -b 2>/dev/null)
+    # Récupération des infos en mode batch (-b = sortie parseable, sans action)
+    nr_output=$(needrestart -b 2>/dev/null)
 
-    # NEEDRESTART-KSTA: 3 = noyau mis à jour, reboot nécessaire
+    # NEEDRESTART-KSTA: 3 = noyau mis à jour, reboot nécessaire (1 = OK)
     ksta=$(echo "$nr_output" | grep "^NEEDRESTART-KSTA:" | awk '{print $2}')
     [ "$ksta" = "3" ] && kernel_reboot=1
 
-    # Récupération des services sous forme de liste
+    # Récupération des services uniquement (NEEDRESTART-SVC), on ignore NEEDRESTART-SESS
     services=$(echo "$nr_output" | grep "^NEEDRESTART-SVC:" | awk '{print $2}' | tr '\n' ' ' | sed 's/ $//')
 
     if [ "$silent" -eq 0 ]; then
@@ -169,12 +186,7 @@ if command -v needrestart &>/dev/null; then
         [ -n "$services" ] && needrestart -r a
     fi
 else
-    # Fallback : checkrestart si disponible (needrestart refusé à l'installation)
-    if command -v checkrestart &>/dev/null; then
-        checkrestart
-    else
-        echo "  (aucun outil disponible pour vérifier les services)"
-    fi
+    echo "  (aucun outil disponible pour vérifier les services)"
 fi
 
 echo
